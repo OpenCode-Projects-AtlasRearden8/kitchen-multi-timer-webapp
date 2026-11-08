@@ -1,0 +1,580 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PanWall — Parallel Kitchen Timers</title>
+<style>
+  :root {
+    --bg: #1b1714;
+    --panel: #262019;
+    --panel-edge: #3b3128;
+    --ink: #f3ece2;
+    --ink-dim: #b8ab9b;
+    --accent: #f0a832;
+    --accent-soft: #f0a83226;
+    --good: #8fc47c;
+    --danger: #d97b6c;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    min-height: 100vh;
+  }
+  header {
+    display: flex; flex-wrap: wrap; gap: .75rem; align-items: center;
+    padding: 1rem 1.25rem; border-bottom: 1px solid var(--panel-edge);
+    position: sticky; top: 0; background: var(--bg); z-index: 5;
+  }
+  header h1 { font-size: 1.25rem; margin: 0; color: var(--accent); }
+  header h1 small { color: var(--ink-dim); font-size: .8rem; font-weight: normal; margin-left: .5rem; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; cursor: pointer; border-radius: 8px;
+    border: 1px solid var(--panel-edge); background: var(--panel);
+    color: var(--ink); padding: .45rem .8rem;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #241a06; border-color: var(--accent); font-weight: 600; }
+  button.paused-all {
+    background: var(--danger); border-color: var(--danger); color: #2b0f08; font-weight: 600;
+    animation: pulse 1.6s infinite;
+  }
+  @keyframes pulse { 50% { filter: brightness(1.2); } }
+  main { max-width: 900px; margin: 0 auto; padding: 1rem 1.25rem 4rem; }
+
+  details.adder { border: 1px solid var(--panel-edge); border-radius: 12px; background: var(--panel); margin-top: 1rem; }
+  details.adder > summary {
+    cursor: pointer; padding: .7rem 1rem; font-weight: 600; color: var(--accent); list-style: none;
+    display: flex; align-items: center; gap: .4rem; user-select: none;
+  }
+  details.adder > summary::before { content: "＋"; }
+  details.adder[open] > summary::before { content: "×"; }
+  .adder-body { padding: 0 1rem 1rem; }
+  .row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .4rem 0; }
+  input[type="text"], input[type="number"] {
+    font: inherit; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--panel-edge); border-radius: 8px; padding: .45rem .6rem;
+  }
+  input[type="number"] { width: 5.5em; font-family: var(--mono); }
+  input[type="text"] { flex: 1; min-width: 10em; }
+  .step-mini {
+    display: grid; grid-template-columns: 1fr auto auto auto;
+    gap: .5rem; align-items: center; margin: .35rem 0;
+  }
+  .step-mini .del { color: var(--danger); }
+  label.small { color: var(--ink-dim); font-size: .85rem; }
+
+  #wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: .9rem; margin-top: 1rem; }
+  .pan {
+    border: 1px solid var(--panel-edge); border-radius: 14px; background: var(--panel);
+    padding: .9rem 1rem; position: relative; display: flex; flex-direction: column; gap: .3rem;
+  }
+  .pan.hot { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .pan.done { border-color: var(--good); box-shadow: 0 0 0 3px #8fc47c26; }
+  .pan-name {
+    font-weight: 700; letter-spacing: .02em; display: flex; align-items: center; gap: .4rem;
+  }
+  .pan-name .dot { width: .6em; height: .6em; border-radius: 50%; background: var(--accent); flex: none; }
+  .pan .step-label { color: var(--ink-dim); font-size: .95rem; }
+  .clock {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 2.4rem; line-height: 1.1; color: var(--ink);
+  }
+  .pan.done .clock { color: var(--good); content: "DONE"; }
+  .clock.urgent { color: var(--accent); }
+  .bar { height: 6px; border-radius: 3px; background: #00000055; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); width: 0%; transition: width .2s linear; }
+  .next { color: var(--ink-dim); font-size: .85rem; }
+  .pan-actions { display: flex; gap: .4rem; margin-top: .3rem; flex-wrap: wrap; }
+  .pan-actions button { padding: .25rem .6rem; font-size: .85rem; }
+  .paused-flag { color: var(--danger); font-size: .8rem; font-weight: 700; }
+  .empty {
+    color: var(--ink-dim); text-align: center; margin-top: 3rem; border: 1px dashed var(--panel-edge);
+    border-radius: 14px; padding: 2rem;
+  }
+  footer { text-align: center; color: var(--ink-dim); font-size: .8rem; padding: 1rem; }
+  .soundbar { display: flex; gap: .4rem; align-items: center; flex-wrap: wrap; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🍳 PanWall <small>parallel kitchen timers</small></h1>
+  <div class="spacer"></div>
+  <div class="soundbar">
+    <button id="muteBtn" title="Toggle all sounds">🔊 Sound on</button>
+    <button id="testBtn" title="Play each pan's chime so you learn which is which">🎵 Test sounds</button>
+  </div>
+  <button id="pauseAllBtn">⏸ Pause everything</button>
+</header>
+
+<main>
+  <details class="adder" id="adder" open>
+    <summary>Add a pan</summary>
+    <div class="adder-body">
+      <div class="row">
+        <label class="small" for="panName">Pan / burner name</label>
+        <input type="text" id="panName" placeholder="e.g. Left pot — rice" maxlength="40">
+      </div>
+      <div class="row"><label class="small">Steps in order (they run one after another):</label></div>
+      <div id="stepList"></div>
+      <div class="row">
+        <button id="addStepRow">+ one step</button>
+        <div class="spacer"></div>
+        <button id="addPan" class="primary">Start pan timer →</button>
+      </div>
+    </div>
+  </details>
+
+  <div id="wall"></div>
+  <div class="empty" id="empty">No pans on the stove yet.<br>Open “Add a pan” — give it a name, add steps like <em>Simmer 15 min → Rest 5 min</em>, and it joins the wall.</div>
+</main>
+
+<footer>PanWall · MIT licensed · all timing runs locally in your browser · Asdale Dynamics, LLC</footer>
+
+<script>
+"use strict";
+// === CORE-START ===
+var CORE = (function () {
+  function seconds(h, m, s) {
+    return (h|0) * 3600 + (m|0) * 60 + (s|0);
+  }
+
+  function fmtClock(sec) {
+    if (sec < 0 || !isFinite(sec)) sec = 0;
+    sec = Math.round(sec);
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    var s = sec % 60;
+    if (h > 0) return h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+    return String(m) + ":" + String(s).padStart(2, "0");
+  }
+
+  // Validate a chain of steps: names non-empty, durations > 0.
+  // Returns { ok: true, steps: [{name, secs}] } or { ok: false, error: "..." }.
+  function validateSteps(raw) {
+    var steps = [];
+    for (var i = 0; i < raw.length; i++) {
+      var r = raw[i];
+      var name = String(r.name || "").trim();
+      var secs = Math.round(Number(r.secs));
+      if (secs <= 0) return { ok: false, error: 'Step ' + (i + 1) + ' ("' + name + '") needs a duration above zero.' };
+      steps.push({ name: name || ("Step " + (i + 1)), secs: secs });
+    }
+    if (!steps.length) return { ok: false, error: "Add at least one step." };
+    return { ok: true, steps: steps };
+  }
+
+  // Initial state for a chain of steps.
+  function initialState() {
+    return { step: 0, elapsedInStep: 0.0, finished: false };
+  }
+
+  // Advance a chain by dt seconds (>= 0). dt may span more than one step.
+  // Returns { state: {step, elapsedInStep, finished}, events: [...] } where events is a
+  // possibly-empty list of: { kind: "step", index, name } or { kind: "done", index, name }.
+  function tickPan(steps, state, dt) {
+    if (dt < 0) dt = 0;
+    var events = [];
+    var step = state.step;
+    var elapsed = state.elapsedInStep;
+    if (state.finished) return { state: state, events: events };
+    var isFinished = false;
+    var remaining = dt;
+    while (step < steps.length) {
+      var left = steps[step].secs - elapsed;
+      if (remaining < left) {
+        elapsed += remaining;
+        remaining = 0;
+        break;
+      }
+      remaining -= left;
+      if (remaining < 1e-9) remaining = 0;
+      elapsed = 0;
+      var wasLast = step === steps.length - 1;
+      events.push({ kind: wasLast ? "done" : "step", index: step, name: steps[step].name });
+      step += 1;
+      if (wasLast) { isFinished = true; break; }
+    }
+    if (remaining > 0 && step >= steps.length) {
+      // Overshoot past the end: clamp to the final step, fully elapsed, still finished.
+      step = steps.length - 1;
+      elapsed = steps[step].secs;
+      isFinished = true;
+    }
+    return {
+      state: { step: step, elapsedInStep: elapsed, finished: isFinished },
+      events: events
+    };
+  }
+
+  // Seconds left in the current step.
+  function stepRemaining(steps, state) {
+    if (state.finished) return 0;
+    return Math.max(0, steps[state.step].secs - state.elapsedInStep);
+  }
+
+  // Seconds left until the whole pan finishes (current step remainder + later steps).
+  function totalRemaining(steps, state) {
+    if (state.finished) return 0;
+    var t = steps[state.step].secs - state.elapsedInStep;
+    for (var i = state.step + 1; i < steps.length; i++) t += steps[i].secs;
+    return Math.max(0, t);
+  }
+
+  // Fraction (0..1) of the current step completed.
+  function stepProgress(steps, state) {
+    if (state.finished) return 1;
+    var st = steps[state.step];
+    return Math.max(0, Math.min(1, st.secs === 0 ? 1 : state.elapsedInStep / st.secs));
+  }
+
+  return {
+    seconds: seconds,
+    fmtClock: fmtClock,
+    validateSteps: validateSteps,
+    initialState: initialState,
+    tickPan: tickPan,
+    stepRemaining: stepRemaining,
+    totalRemaining: totalRemaining,
+    stepProgress: stepProgress
+  };
+})();
+// === CORE-END ===
+
+// ---------- state ----------
+var pans = [];           // {id, name, soundIdx, steps, state, paused, finishedSeen}
+var pausedAll = false;
+var muted = false;
+var nextPanId = 1;
+var nextSoundIdx = 0;    // cycles 0..5 for distinct chimes
+var lastFrame = null;    // ms timestamp used for real-time advance
+
+var SOUND_KEYNAMES = [
+  "one tone", "two tone", "three tone", "low double", "high sparkle", "rising trill"
+];
+
+// ---------- audio ----------
+var AudioCtx = window.AudioContext || window.webkitAudioContext;
+var audioCtx = null;
+
+function getCtx() {
+  if (!muted && audioCtx === null && AudioCtx) {
+    try { audioCtx = new AudioCtx(); } catch (e) { audioCtx = null; }
+  }
+  return audioCtx;
+}
+
+// Gentle bell tone: sine partial with soft exponential decay.
+function bell(freq, when, dur, gainPeak) {
+  var ctx = getCtx();
+  if (!ctx) return;
+  dur = dur || 1.1;
+  gainPeak = gainPeak || 0.14;
+  var o = ctx.createOscillator();
+  var g = ctx.createGain();
+  o.type = "sine";
+  o.frequency.value = freq;
+  g.gain.setValueAtTime(0, when);
+  g.gain.linearRampToValueAtTime(gainPeak, when + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, when + dur);
+  o.connect(g).connect(ctx.destination);
+  o.start(when);
+  o.stop(when + dur + 0.05);
+  var o2 = ctx.createOscillator();
+  var g2 = ctx.createGain();
+  o2.type = "sine";
+  o2.frequency.value = freq * 2.01;
+  g2.gain.setValueAtTime(0, when);
+  g2.gain.linearRampToValueAtTime(gainPeak * 0.25, when + 0.01);
+  g2.gain.exponentialRampToValueAtTime(0.0001, when + dur * 0.5);
+  o2.connect(g2).connect(ctx.destination);
+  o2.start(when);
+  o2.stop(when + dur * 0.5 + 0.05);
+}
+
+var PENTATONIC_ROOTS = [523.25, 587.33, 659.25, 392.00, 698.46, 440.00]; // gentle, spread apart
+
+// Each pan owns a signature (root pitch + rhythm slot) so you can tell who is talking.
+function playSignature(soundIdx, kind) {
+  var ctx = getCtx();
+  if (!ctx) return;
+  if (ctx.state === "suspended" && ctx.resume) ctx.resume();
+  var root = PENTATONIC_ROOTS[soundIdx % PENTATONIC_ROOTS.length];
+  var t = ctx.currentTime + 0.02;
+  var seq;
+  if (kind === "step") {
+    seq = [root];
+  } else { // done — unmistakably final: short wait, then the pan's motif
+    if (soundIdx % 4 === 0) seq = [root, root * 1.25, root * 1.5];
+    else if (soundIdx % 4 === 1) seq = [root * 1.5, root * 1.25, root];
+    else if (soundIdx % 4 === 2) seq = [root, root, root * 2];
+    else seq = [root * 1.25, root * 1.5, root * 2];
+  }
+  for (var i = 0; i < seq.length; i++) bell(seq[i], t + i * 0.28, kind === "step" ? 1.0 : 1.5);
+}
+
+// ---------- adder form ----------
+var stepRows = [];
+
+function makeStepRow(name, secs) {
+  var wrap = document.createElement("div");
+  wrap.className = "step-mini";
+  var n = document.createElement("input");
+  n.type = "text"; n.placeholder = "Step name (e.g. Simmer)"; n.value = name || "";
+  var h = document.createElement("input");
+  h.type = "number"; h.min = 0; h.placeholder = "h"; h.title = "hours"; h.value = secs ? Math.floor(secs / 3600) : "";
+  var m = document.createElement("input");
+  m.type = "number"; m.min = 0; m.placeholder = "min"; m.title = "minutes";
+  m.value = secs ? ((secs % 3600) / 60 | 0) : "";
+  var s = document.createElement("input");
+  s.type = "number"; s.min = 0; s.placeholder = "sec"; s.title = "seconds";
+  s.value = secs ? secs % 60 : "";
+  var del = document.createElement("button");
+  del.className = "del"; del.type = "button"; del.textContent = "✕"; del.title = "Remove step";
+  del.addEventListener("click", function () { wrap.remove(); });
+  wrap.append(n, h, m, s, del);
+  return wrap;
+}
+
+function collectStepRows() {
+  var out = [];
+  document.querySelectorAll("#stepList .step-mini").forEach(function (w) {
+    var inputs = w.querySelectorAll("input");
+    out.push({
+      name: inputs[0].value.trim(),
+      secs: CORE.seconds(inputs[1].value, inputs[2].value, inputs[3].value)
+    });
+  });
+  return out;
+}
+
+function stepListFromSpec(spec) {
+  // spec: array of [name, h, m] or {name, secs}
+  document.getElementById("stepList").innerHTML = "";
+  spec.forEach(function (p) {
+    document.getElementById("stepList").appendChild(
+      makeStepRow(p.name, p.secs)
+    );
+  });
+}
+
+document.getElementById("addStepRow").addEventListener("click", function () {
+  document.getElementById("stepList").appendChild(makeStepRow("", 0));
+});
+
+document.getElementById("addPan").addEventListener("click", function () {
+  var name = document.getElementById("panName").value.trim();
+  var raw = collectStepRows();
+  var v = CORE.validateSteps(raw);
+  if (!v.ok) { alert(v.error); return; }
+  addPan(name || "Pan " + (nextPanId), v.steps);
+  document.getElementById("panName").value = "";
+  stepListFromSpec([{ name: "", secs: 0 }]);
+  document.getElementById("empty").hidden = true;
+});
+
+// ---------- pan lifecycle ----------
+function addPan(name, steps) {
+  var pan = {
+    id: nextPanId++,
+    name: name,
+    soundIdx: nextSoundIdx++ % PENTATONIC_ROOTS.length,
+    steps: steps,
+    state: CORE.initialState(),
+    paused: false,
+    done: false
+  };
+  pans.push(pan);
+  getCtx(); // unlock audio on this user gesture
+  playSignature(pan.soundIdx, "step");
+  render();
+}
+
+function deletePan(id) {
+  pans = pans.filter(function (p) { return p.id !== id; });
+  if (!pans.length) document.getElementById("empty").hidden = false;
+  render();
+}
+
+function restartPan(id) {
+  var p = pans.find(function (x) { return x.id === id; });
+  if (!p) return;
+  p.state = CORE.initialState();
+  p.done = false;
+  p.paused = false;
+  render();
+}
+
+function log(msg) { console.log("PanWall:", msg); }
+
+// ---------- global controls ----------
+var pauseBtn = document.getElementById("pauseAllBtn");
+pauseBtn.addEventListener("click", function () {
+  pausedAll = !pausedAll;
+  pauseBtn.textContent = pausedAll ? "▶ Resume everything" : "⏸ Pause everything";
+  pauseBtn.classList.toggle("paused-all", pausedAll);
+  getCtx();
+  if (pausedAll) { pauseBtn.blur(); }
+  render();
+});
+
+var muteBtn = document.getElementById("muteBtn");
+muteBtn.addEventListener("click", function () {
+  muted = !muted;
+  muteBtn.textContent = muted ? "🔇 Sound off" : "🔊 Sound on";
+  if (!muted) { getCtx(); playSignature(0, "step"); }
+});
+
+document.getElementById("testBtn").addEventListener("click", function () {
+  getCtx();
+  if (muted) { muteBtn.click(); return; }
+  var ctx = getCtx();
+  if (!ctx) { alert("Sounds aren’t available in this browser."); return; }
+  var ctxTime = ctx.currentTime + 0.05;
+  pans.forEach(function (p, i) {
+    var root = PENTATONIC_ROOTS[p.soundIdx % PENTATONIC_ROOTS.length];
+    bell(root, ctxTime + i * 1.2, 0.8, 0.12);
+    bell(root * 1.5, ctxTime + i * 1.2 + 0.4, 0.9, 0.12);
+    setTimeout(function () {
+      var spot = document.getElementById("pip-" + p.id);
+      if (spot) {
+        spot.animate([{ transform: "scale(1)" }, { transform: "scale(1.5)" }, { transform: "scale(1)" }], { duration: 600 });
+      }
+    }, i * 1200 + 50);
+  });
+});
+
+// ---------- render ----------
+function panEl(pan) {
+  var para = document.createElement("div");
+  para.className = "pan" + (pan.done ? " done" : "");
+  para.dataset.id = pan.id;
+
+  var head = document.createElement("div");
+  head.className = "pan-name";
+  var dot = document.createElement("span");
+  dot.className = "dot";
+  dot.id = "pip-" + pan.id;
+  dot.style.background = ["#f0a832", "#8fc47c", "#6cb4d9", "#d98cc0", "#d97b6c", "#b8a4f0"][pan.soundIdx];
+  dot.title = "This pan's chime: " + SOUND_KEYNAMES[pan.soundIdx];
+  var nameSpan = document.createElement("span");
+  nameSpan.textContent = pan.name;
+  head.append(dot, nameSpan);
+  if (pan.paused || pausedAll) {
+    var pf = document.createElement("span");
+    pf.className = "paused-flag"; pf.textContent = "⏸ PAUSED";
+    head.appendChild(pf);
+  }
+  para.appendChild(head);
+
+  if (pan.done) {
+    var dlabel = document.createElement("div");
+    dlabel.className = "step-label";
+    dlabel.textContent = "All steps done";
+    var dclock = document.createElement("div");
+    dclock.className = "clock"; dclock.textContent = "DONE";
+    para.append(dlabel, dclock);
+  } else {
+    var step = pan.steps[pan.state.step];
+    var sl = document.createElement("div");
+    sl.className = "step-label";
+    sl.textContent = "Step " + (pan.state.step + 1) + " of " + pan.steps.length + ": " + step.name;
+    para.appendChild(sl);
+
+    var clock = document.createElement("div");
+    clock.className = "clock";
+    var sr = CORE.stepRemaining(pan.steps, pan.state);
+    clock.textContent = CORE.fmtClock(sr);
+    if (!pan.paused && !pausedAll && sr > 0 && sr <= 10) clock.classList.add("urgent");
+    para.appendChild(clock);
+
+    var bar = document.createElement("div");
+    bar.className = "bar";
+    var fill = document.createElement("div");
+    fill.style.width = (CORE.stepProgress(pan.steps, pan.state) * 100) + "%";
+    bar.appendChild(fill);
+    para.appendChild(bar);
+
+    var nxt = pan.steps[pan.state.step + 1];
+    var nb = document.createElement("div");
+    nb.className = "next";
+    nb.textContent = nxt
+      ? "then: " + nxt.name + " · " + CORE.fmtClock(CORE.totalRemaining(pan.steps, pan.state)) + " total left"
+      : "finishes the pan · " + CORE.fmtClock(CORE.totalRemaining(pan.steps, pan.state)) + " total";
+    para.appendChild(nb);
+  }
+
+  var acts = document.createElement("div");
+  acts.className = "pan-actions";
+  var pBtn = document.createElement("button");
+  pBtn.textContent = pan.paused ? "▶ Resume pan" : "⏸ Pause pan";
+  pBtn.addEventListener("click", function () { pan.paused = !pan.paused; render(); });
+  acts.appendChild(pBtn);
+  if (pan.done) {
+    var rBtn = document.createElement("button");
+    rBtn.textContent = "↻ Restart chain";
+    rBtn.addEventListener("click", function () { restartPan(pan.id); });
+    acts.appendChild(rBtn);
+  }
+  var xBtn = document.createElement("button");
+  xBtn.textContent = "✕ Remove";
+  xBtn.addEventListener("click", function () { deletePan(pan.id); });
+  acts.appendChild(xBtn);
+  para.appendChild(acts);
+  return para;
+}
+
+function render() {
+  var wall = document.getElementById("wall");
+  wall.innerHTML = "";
+  var sorted = pans.slice().sort(function (a, b) {
+    if (a.done !== b.done) return a.done ? 1 : -1;
+    return CORE.stepRemaining(a.steps, a.state) - CORE.stepRemaining(b.steps, b.state);
+  });
+  sorted.forEach(function (p) { wall.appendChild(panEl(p)); });
+}
+
+// ---------- main loop (drift-free) ----------
+var lastRender = 0;
+
+function loop(now) {
+  if (lastFrame === null) lastFrame = now;
+  var dt = (now - lastFrame) / 1000;
+  lastFrame = now;
+  if (dt > 0 && !pausedAll) {
+    var anyEvents = false;
+    pans.forEach(function (p) {
+      if (p.paused || p.done) return;
+      var r = CORE.tickPan(p.steps, p.state, dt);
+      p.state = r.state;
+      r.events.forEach(function (ev) {
+        anyEvents = true;
+        playSignature(p.soundIdx, ev.kind);
+        if (ev.kind === "done") {
+          p.done = true;
+          log(p.name + ": '" + ev.name + "' finished — pan complete");
+          document.title = "🔔 " + p.name + " done — PanWall";
+        } else {
+          log(p.name + ": '" + ev.name + "' done → next step");
+        }
+      });
+    });
+    // Re-render at most ~4x/sec (or immediately on chain events); wall accuracy stays honest.
+    if (anyEvents || now - lastRender > 250) {
+      lastRender = now;
+      render();
+    }
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ---------- seed the form with a sensible starting demo flow ----------
+stepListFromSpec([{ name: "Simmer", secs: 60 }, { name: "Rest", secs: 30 }]);
+document.getElementById("empty").hidden = false;
+</script>
+</body>
+</html>
